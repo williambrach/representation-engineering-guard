@@ -154,29 +154,56 @@ class RepReader(ABC):
 
 
 class PCARepReader(RepReader):
-    """Extract directions via PCA"""
+    """
+    Extract directions via PCA.
+    A RepReader that uses Principal Component Analysis (PCA) to find concept directions.
+    It identifies the directions of highest variance in the hidden state differences
+    between positive and negative examples of a concept.
+    """
 
+    # This flag indicates that the reader needs the model's hidden states to function.
     needs_hiddens = True
 
-    def __init__(self, n_components=1):
+    def __init__(self, n_components : int = 1) -> None:
+        """
+        Initializes the PCARepReader.
+        Args:
+            n_components (int): The number of principal components to extract.
+        """
         super().__init__()
         self.n_components = n_components
+        # A dictionary to store the mean of the training hidden states for each layer.
+        # This is needed to center new data before projecting it.
         self.H_train_means = {}
 
     def get_rep_directions(
         self, model, tokenizer, hidden_states, hidden_layers, **kwargs
     ):
-        """Get PCA components for each layer"""
+        """
+        Get PCA components for each layer
+        Computes the principal components (the concept directions) for each specified layer's hidden states.
+        Args:
+            hidden_states (dict): A dictionary where keys are layer numbers and values are the
+                                  hidden state differences (e.g., H(positive) - H(negative)).
+            hidden_layers (list): A list of layer numbers to compute directions for.
+        Returns:
+            directions (dict): A dictionary mapping each layer to its computed PCA components.
+        """
         directions = {}
 
+        # Iterate over each layer to find its unique concept direction.
         for layer in hidden_layers:
+            # Get the hidden state differences for the current layer.
             H_train = hidden_states[layer]
+            # Step 1: Center the data. Calculate and store the mean of the hidden states.
             H_train_mean = H_train.mean(axis=0, keepdims=True)
             self.H_train_means[layer] = H_train_mean
             H_train = recenter(H_train, mean=H_train_mean).cpu()
             H_train = np.vstack(H_train)
+            # Step 2: Fit the PCA model to the centered data to find the directions of max variance.
             pca_model = PCA(n_components=self.n_components, whiten=False).fit(H_train)
 
+            # The principal components are our "reading vectors" or concept directions.
             directions[layer] = (
                 pca_model.components_
             )  # shape (n_components, n_features)
@@ -185,16 +212,27 @@ class PCARepReader(RepReader):
         return directions
 
     def get_signs(self, hidden_states, train_labels, hidden_layers):
-
+        """
+        Determines the "sign" of the concept direction for each layer. For example, it figures out
+        if a positive score along the PCA vector means "more truthful" or "less truthful."
+        Args:
+            hidden_states (dict): The raw hidden states (not the differences) from the training data.
+            train_labels (list): The labels indicating the "correct" choice for each training example.
+            hidden_layers (list): The layers to determine signs for.
+        Returns:
+            signs (dict): A dictionary mapping each layer to an array of signs (+1 or -1).
+        """
         signs = {}
 
         for layer in hidden_layers:
+            # Sanity check: ensure the number of hidden states matches the number of labels.
             assert hidden_states[layer].shape[0] == len(
                 np.concatenate(train_labels)
             ), f"Shape mismatch between hidden states ({hidden_states[layer].shape[0]}) and labels ({len(np.concatenate(train_labels))})"
             layer_hidden_states = hidden_states[layer]
 
             # NOTE: since scoring is ultimately comparative, the effect of this is moot
+            # Center the hidden states using the mean calculated during training.
             layer_hidden_states = recenter(
                 layer_hidden_states, mean=self.H_train_means[layer]
             )
@@ -203,10 +241,12 @@ class PCARepReader(RepReader):
             layer_signs = np.zeros(self.n_components)
             for component_index in range(self.n_components):
 
+                # Project the raw hidden states onto the PCA direction to get a 1D score.
                 transformed_hidden_states = project_onto_direction(
                     layer_hidden_states, self.directions[layer][component_index]
                 ).cpu()
 
+                # Re-group the flattened scores into chunks corresponding to the choices for each prompt.
                 pca_outputs_comp = [
                     list(
                         islice(
@@ -219,12 +259,14 @@ class PCARepReader(RepReader):
                 ]
 
                 # We do elements instead of argmin/max because sometimes we pad random choices in training
+                # Check how often the correct answer corresponds to the MINIMUM score in its group.
                 pca_outputs_min = np.mean(
                     [
                         o[train_labels[i].index(1)] == min(o)
                         for i, o in enumerate(pca_outputs_comp)
                     ]
                 )
+                # Check how often the correct answer corresponds to the MAXIMUM score in its group.
                 pca_outputs_max = np.mean(
                     [
                         o[train_labels[i].index(1)] == max(o)
@@ -232,6 +274,8 @@ class PCARepReader(RepReader):
                     ]
                 )
 
+                # If the correct answer is more often the max score, the sign is +1.
+                # If it's more often the min score, the sign is -1.
                 layer_signs[component_index] = np.sign(
                     np.mean(pca_outputs_max) - np.mean(pca_outputs_min)
                 )

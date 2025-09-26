@@ -134,7 +134,8 @@ class RepReader(ABC):
         Returns:
             transformed_hidden_states: dictionary with entries of dimension (n_examples,)
         """
-
+        print(f"Using component index {component_index}")
+        print(f"Number of components: {self.n_components}")
         assert component_index < self.n_components
         transformed_hidden_states = {}
         for layer in hidden_layers:

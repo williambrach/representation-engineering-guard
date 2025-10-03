@@ -134,10 +134,9 @@ class RepReader(ABC):
         Returns:
             transformed_hidden_states: dictionary with entries of dimension (n_examples,)
         """
-        print(f"Using component index {component_index}")
-        print(f"Number of components: {self.n_components}")
         assert component_index < self.n_components
         transformed_hidden_states = {}
+        inputs  = []
         for layer in hidden_layers:
             layer_hidden_states = hidden_states[layer]
 
@@ -151,7 +150,8 @@ class RepReader(ABC):
                 layer_hidden_states, self.directions[layer][component_index]
             )
             transformed_hidden_states[layer] = H_transformed.cpu().numpy()
-        return transformed_hidden_states
+            inputs.append(layer_hidden_states.cpu().numpy())
+        return transformed_hidden_states, inputs
 
 
 class PCARepReader(RepReader):
@@ -350,6 +350,7 @@ class RandomRepReader(RepReader):
             )
 
         return directions
+
 
 
 DIRECTION_FINDERS = {

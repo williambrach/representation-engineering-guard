@@ -274,3 +274,39 @@ class RepReadingPipeline(Pipeline):
             )
 
         return direction_finder
+
+    def get_hidden_and_direction_vectors(
+        self,
+        train_inputs: str | list[str] | list[list[str]],
+        rep_token: str | int = -1,
+        hidden_layers: list[int] | None = None,
+        n_difference: int = 1,
+        batch_size: int = 8,
+        train_labels: list[int] | None = None,
+        direction_method: str = "pca",
+        direction_finder_kwargs: dict | None = None,
+        which_hidden_states: str | None = None,
+        **tokenizer_args,
+    ) -> tuple:
+        if hidden_layers is None:
+            hidden_layers = [-1]
+        hidden_states = None
+        direction_vectors = None
+        # If the method requires hidden states (like PCA), collect them.
+        hidden_states = self._batched_string_to_hiddens(
+                train_inputs,
+                rep_token,
+                hidden_layers,
+                batch_size,
+                which_hidden_states,
+                **tokenizer_args,
+            )
+        direction_vectors = {k: np.copy(v) for k, v in hidden_states.items()}
+        for layer in hidden_layers:
+            for _ in range(n_difference):
+                direction_vectors[layer] = (
+                    direction_vectors[layer][::2]
+                    - direction_vectors[layer][1::2]
+                )
+        return hidden_states, direction_vectors
+
